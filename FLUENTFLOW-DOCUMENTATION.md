@@ -36,31 +36,47 @@ FluentFlow bridges FluentCart (a WooCommerce alternative/ecommerce plugin) with 
 ## 2. Architecture & File Structure
 
 ```
-fluentflow-bricks-bridge.php          # Main plugin file, autoloader, bootstrap
-inc/
-├── class-core-registry.php           # Module manager, hooks registration
-├── class-data-fetcher.php            # ALL token resolution logic (~1360 lines)
-├── class-shortcodes.php              # WordPress shortcodes for every token
-├── class-admin-dashboard.php         # Admin settings page
-├── class-feature-interface.php       # Interface for modules
-├── modules/
-│   ├── class-module-bricks.php       # Bricks integration (tags, query loops)
-│   ├── class-module-elementor.php    # Elementor integration (future)
-│   ├── class-module-overrides.php    # Template overrides (future)
-│   └── class-module-pro.php          # Pro features (future)
-└── assets/
-    └── ffbb-cart-live.js             # Frontend JS for live cart updates
+fluentflow-bricks-bridge.php          # Main plugin file, constants, PSR-4 autoloader
+src/
+├── Admin/AdminDashboard.php          # Admin settings and token reference UI
+├── Contracts/FeatureInterface.php    # Module contract
+├── Core/Plugin.php                   # Bootstrap, module lifecycle, global hook registration
+├── Data/DataFetcher.php              # Token resolver facade
+├── DataProvider/
+│   ├── CartData.php                  # FluentCart cart model/data access
+│   └── ProductData.php               # FluentCart product model/data access
+├── Integrations/
+│   ├── Bricks/BricksModule.php       # Bricks dynamic tags, elements, query loops
+│   ├── Bricks/TemplateOverridesModule.php
+│   └── Elementor/ElementorModule.php
+├── Licensing/ProModule.php
+└── Shortcodes/Shortcodes.php
+includes/
+├── compat.php                        # Legacy class aliases for existing integrations
+└── views/                            # PHP-only admin views
+assets/
+├── css/admin-dashboard-style.css
+└── js/
+    ├── admin-dashboard.js
+    └── ffbb-cart-live.js             # Frontend live cart updater
 ```
 
 ### Bootstrap Flow
 
 1. `fluentflow-bricks-bridge.php` registers autoloader and `init` hook
-2. On `init` (priority 5), `Core_Registry::boot()` runs:
-   - Loads modules from `inc/modules/`
+2. On `init` (priority 5), `FluentFlow\Core\Plugin::boot()` runs:
+   - Instantiates built-in modules from `src/Integrations` and `src/Licensing`
    - Calls each module's `init()` method
-   - Registers shortcodes via `Shortcodes::instance()->init()`
+   - Registers shortcodes via `FluentFlow\Shortcodes\Shortcodes::instance()->init()`
    - Registers AJAX handlers for `ffbb_cart_data`
-   - Initializes `Admin_Dashboard` (admin only)
+   - Initializes `FluentFlow\Admin\AdminDashboard` (admin only)
+
+### Data Boundaries
+
+- `CartData` owns FluentCart cart lookup, cart data parsing, totals, counts, and item media resolution.
+- `ProductData` owns FluentCart product ID resolution, product model lookup, and default variation lookup.
+- Hook classes register WordPress/Bricks/Elementor callbacks only; business logic lives in data providers and token rendering classes.
+- No API keys, database credentials, or license secrets are localized into frontend scripts.
 
 ---
 
@@ -245,6 +261,33 @@ Available on EVERY page:
 2. Set Query → Type → **"Customer Orders"**
 3. Inside, use any order token + customer token
 
+### 4.3 Customer Query (`ff_customer`)
+
+**What it does:** Provides the current logged-in FluentCart customer as a one-item Bricks loop. Each loop iteration makes customer tokens (`{ff_customer_name}`, `{ff_customer_email}`, etc.) resolve to that customer.
+
+**How to use in Bricks:**
+1. Add a Container element
+2. Set Query → Type → **"Customer"**
+3. Inside, use any customer token
+
+### 4.4 Subscriptions Query (`ff_subscriptions`)
+
+**What it does:** Iterates over the current logged-in customer's subscriptions, newest first. Each loop iteration makes subscription tokens (`{ff_subscription_status}`, `{ff_subscription_recurring}`, `{ff_subscription_next_billing}`) resolve to the current subscription object.
+
+**How to use in Bricks:**
+1. Add a Container element
+2. Set Query → Type → **"Subscriptions"**
+3. Inside, use any subscription token
+
+### 4.5 Coupons Query (`ff_coupons`)
+
+**What it does:** Iterates over FluentCart coupons, newest first. Each loop iteration makes coupon tokens (`{ff_coupon_code}`, `{ff_coupon_amount}`, `{ff_coupon_type}`) resolve to the current coupon object.
+
+**How to use in Bricks:**
+1. Add a Container element
+2. Set Query → Type → **"Coupons"**
+3. Inside, use any coupon token
+
 ---
 
 ## 5. Shortcode Container Loops
@@ -290,11 +333,11 @@ Cart tokens render static HTML at page load. When the user changes quantity via 
 ### Solution Architecture
 
 **PHP AJAX Endpoint** (`wp_ajax_ffbb_cart_data` / `wp_ajax_nopriv_ffbb_cart_data`):
-- Hooked in `Core_Registry::register_hooks()`
-- Handler: `Data_Fetcher::handle_ajax_cart_data()`
+- Hooked in `FluentFlow\Core\Plugin::register_hooks()`
+- Handler: `FluentFlow\Data\DataFetcher::handle_ajax_cart_data()`
 - Returns JSON: `{ items: [{ id, quantity, price_formatted, subtotal_formatted }], total, subtotal, item_count }`
 
-**Frontend JS** (`inc/assets/ffbb-cart-live.js`):
+**Frontend JS** (`assets/js/ffbb-cart-live.js`):
 - Listens for `fluentCartFragmentsReplaced` and `fluentCartNotifyCartDrawerItemChanged` events (dispatched by FluentCart after any cart AJAX operation)
 - Fetches cart data from the endpoint
 - Updates DOM elements matching `[data-ffbb-token="price"][data-ffbb-item-id="X"]`, etc.
@@ -302,7 +345,7 @@ Cart tokens render static HTML at page load. When the user changes quantity via 
 - Adds `.ffbb-item-stale` class to removed items (style with `display:none`)
 
 **Enqueue Logic**:
-- `Data_Fetcher::enqueue_cart_live_assets()` — called by every cart token resolver
+- `FluentFlow\Data\DataFetcher::enqueue_cart_live_assets()` — called by every cart token resolver
 - Uses `static $enqueued` flag to prevent duplicate enqueue
 - Localizes `ffbb_cart_vars.ajaxurl` for the JS
 
@@ -437,7 +480,7 @@ FluentCart\App\Modules\Templating\AssetLoader    // Cart/checkout asset enqueue
 
 ### 7.11 Admin Dashboard & Licensing
 
-- **Class:** `FluentFlow\Admin_Dashboard`
+- **Class:** `FluentFlow\Admin\AdminDashboard`
 - **Settings stored in:** `ffbb_settings` option (serialized array)
 - **Key settings:** `modules` (array of enabled/disabled module IDs), `license` (license key string)
 - **Dashboard renders at:** `admin.php?page=fluentflow`
@@ -496,7 +539,7 @@ Added full customer profile support:
 **Fixes during this session:**
 - Button `data-cart-id` attribute (was `data-process-id`)
 - Enqueue FluentCart JS properly for buttons
-- Shortcode + dynamic tag resolution both use `Data_Fetcher::resolve()` consistently
+- Shortcode + dynamic tag resolution both use `FluentFlow\Data\DataFetcher::resolve()` consistently
 - Removed admin email from license activation
 
 ### Session 6 — Live AJAX Cart Updates
@@ -530,13 +573,14 @@ Added full customer profile support:
 |---|---|
 | Total tokens | ~52 |
 | Token groups | 8 (Product, Customer, Order, Cart, Subscription, Coupon, Checkout, —) |
-| PHP files in `inc/` | 6 |
+| PHP files in `src/` | 14 |
+| PHP files in `includes/` | 5 |
 | Module files | 4 |
-| Bricks query types | 2 (Cart Items, Customer Orders) |
+| Bricks query types | 5 (Cart Items, Customer Orders, Customer, Subscriptions, Coupons) |
 | Container shortcodes | 2 (`[ff_cart_items]`, `[ff_customer_orders]`) |
 | AJAX endpoints | 1 (`ffbb_cart_data`) |
 | Frontend JS files | 1 (`ffbb-cart-live.js`) |
-| WordPress filters used | 12 (Bricks: 10 dynamic tag + query loop hooks) |
+| WordPress filters used | 17 (Bricks: dynamic tag + query loop hooks) |
 | WordPress actions used | 4 (init, admin_enqueue_scripts, wp_ajax_*, activation/deactivation) |
 | FluentCart model classes used | 6 |
 | FluentCart helper classes used | 3 |

@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       FluentFlow — Page Builder Bridge
  * Plugin URI:        https://fluentflow.io
- * Description:       Modular extension framework for Bricks Builder & Elementor with dynamic tags, shortcodes, glassmorphic admin UI, and Pro licensing.
+ * Description:       Minimal FluentCart data bridge for Bricks Builder and page-builder dynamic design control.
  * Version:           1.0.0
  * Requires at least: 5.8
  * Requires PHP:      8.0
@@ -21,34 +21,24 @@ define( 'FFBB_URL', plugin_dir_url( __FILE__ ) );
 define( 'FFBB_BASENAME', plugin_basename( __FILE__ ) );
 
 /**
- * Autoload classes using fully-qualified class names.
+ * PSR-4 autoloader for FluentFlow classes.
  */
-spl_autoload_register( function ( $class ) {
-	$prefix   = 'FluentFlow\\';
-	$base_dir = FFBB_DIR . '/inc/';
+spl_autoload_register( static function ( string $class ): void {
+	$prefix = 'FluentFlow\\';
 
-	if ( strncmp( $class, $prefix, strlen( $prefix ) ) !== 0 ) {
+	if ( 0 !== strncmp( $class, $prefix, strlen( $prefix ) ) ) {
 		return;
 	}
 
-	$relative_class = substr( $class, strlen( $prefix ) );
-	$relative_class = str_replace( '\\', '/', $relative_class );
-	$slug           = strtolower( str_replace( '_', '-', $relative_class ) );
+	$relative = substr( $class, strlen( $prefix ) );
+	$file     = FFBB_DIR . '/src/' . str_replace( '\\', '/', $relative ) . '.php';
 
-	$candidates = [
-		$base_dir . "class-{$slug}.php",
-		$base_dir . "interface-{$slug}.php",
-		$base_dir . "trait-{$slug}.php",
-		$base_dir . "{$slug}.php",
-	];
-
-	foreach ( $candidates as $file ) {
-		if ( file_exists( $file ) ) {
-			require $file;
-			return;
-		}
+	if ( is_readable( $file ) ) {
+		require_once $file;
 	}
 } );
+
+require_once FFBB_DIR . '/includes/compat.php';
 
 /**
  * Detect active page builders.
@@ -89,7 +79,7 @@ if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
  * Builder modules self-register only when their builder is detected.
  */
 add_action( 'init', function () {
-	$registry = \FluentFlow\Core_Registry::instance();
+	$registry = \FluentFlow\Core\Plugin::instance();
 	$registry->boot();
 }, 5 );
 
@@ -97,7 +87,7 @@ add_action( 'init', function () {
  * Activation hook.
  */
 register_activation_hook( __FILE__, function () {
-	$registry = \FluentFlow\Core_Registry::instance();
+	$registry = \FluentFlow\Core\Plugin::instance();
 	$registry->activate();
 } );
 
@@ -105,6 +95,6 @@ register_activation_hook( __FILE__, function () {
  * Deactivation hook.
  */
 register_deactivation_hook( __FILE__, function () {
-	$registry = \FluentFlow\Core_Registry::instance();
+	$registry = \FluentFlow\Core\Plugin::instance();
 	$registry->deactivate();
 } );
